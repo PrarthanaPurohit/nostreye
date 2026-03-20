@@ -1,0 +1,36 @@
+[package]
+name = "nostreye-cam"
+version = "0.1.0"
+edition = "2021"
+description = "Camera operations + Nostr event signing on Raspberry Pi"
+authors = ["prarthana"]
+
+[[bin]]
+name = "nostreye-cam"
+path = "src/main.rs"
+
+[dependencies]
+# Safe Rust bindings for libcamera (requires libcamera >= 0.4.0 via pkg-config)
+libcamera = "0.7"
+
+# device-signer: hardware-linked secp256k1 key gen + Nostr Schnorr signing
+device-signer = "0.1"
+
+# Nostr protocol primitives (event building, kind constants, json serialisation)
+nostr = { version = "0.44", features = ["std"] }
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Ergonomic error handling
+anyhow = "1"
+
+# SHA-256 for building Nostr event ID hash
+sha2 = "0.10"
+hex = "0.4"
+serde_json = "1"
+image = "0.24"
