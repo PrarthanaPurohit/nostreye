@@ -27,6 +27,13 @@ pub struct CameraInfo {
     pub id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct FrameInfo {
+    pub file_size: usize,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// List every camera that libcamera can see.
 pub fn list_cameras() -> Result<Vec<CameraInfo>> {
     let mgr = CameraManager::new().context("Failed to create CameraManager")?;
@@ -355,7 +362,7 @@ fn write_buffer_as_jpeg(
 
 /// Capture a single frame from the camera at `camera_index` and write a valid JPEG to `output_path`.
 /// Returns the number of bytes written to the file.
-pub fn capture_frame(camera_index: usize, output_path: &str) -> Result<usize> {
+pub fn capture_frame(camera_index: usize, output_path: &str) -> Result<FrameInfo> {
     let mgr = CameraManager::new().context("Failed to create CameraManager")?;
     let cameras = mgr.cameras();
 
@@ -461,5 +468,5 @@ pub fn capture_frame(camera_index: usize, output_path: &str) -> Result<usize> {
 
     info!("Saved JPEG to '{}'", output_path);
 
-    Ok(file_len)
+    Ok(FrameInfo { file_size: file_len, width, height })
 }

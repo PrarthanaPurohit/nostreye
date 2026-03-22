@@ -1,15 +1,15 @@
 use anyhow::{Context, Result};
 use device_signer::identity::DeviceIdentity;
 use nostr::{EventId, PublicKey, Tag};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use tracing::info;
 
 
-pub struct NostreYeSigner {
+pub struct NostreyeSigner {
     identity: DeviceIdentity,
 }
 
-impl NostreYeSigner {
+impl NostreyeSigner {
     pub fn new(camera_id: Option<String>) -> Result<Self> {
         let identity =
             DeviceIdentity::new(camera_id).context("Failed to initialise DeviceIdentity")?;
@@ -28,6 +28,18 @@ impl NostreYeSigner {
     /// Return the device's Nostr public key as a lowercase hex string.
     pub fn pubkey_hex(&self) -> &str {
         &self.identity.info.nostr_pubkey_hex
+    }
+
+    /// Sign a NIP-01 kind 0 metadata (profile) event.
+    /// Content is JSON: name, display_name, about, picture.
+    pub fn sign_metadata(&self, name: &str, display_name: &str, about: &str, picture: &str) -> Result<SignedEvent> {
+        let content = serde_json::json!({
+            "name": name,
+            "display_name": display_name,
+            "about": about,
+            "picture": picture,
+        });
+        self.sign_event(0, &serde_json::to_string(&content)?, vec![])
     }
 
     pub fn sign_text_note(&self, content: &str, extra_tags: Vec<Tag>) -> Result<SignedEvent> {
@@ -60,7 +72,7 @@ impl NostreYeSigner {
         let commitment_str = serde_json::to_string(&commitment)?;
 
         // Compute event ID = SHA-256(commitment) 
-        let mut hasher = Sha256::new();
+        let mut hasher = sha2::Sha256::new();
         hasher.update(commitment_str.as_bytes());
         let event_id_bytes: [u8; 32] = hasher.finalize().into();
         let event_id_hex = hex::encode(event_id_bytes);
@@ -96,10 +108,87 @@ impl NostreYeSigner {
         })
     }
 
+    /// Generic NIP-01 event signer for any `kind`.
+    /// `tags` is a list of tag arrays, e.g. `[["url", "https://…"], ["m", "image/jpeg"]]`.
+    pub fn sign_event(&self, kind: u64, content: &str, tags: Vec<Vec<String>>) -> Result<SignedEvent> {
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let pubkey_hex = &self.identity.info.nostr_pubkey_hex;
+
+        let tags_json: Vec<serde_json::Value> = tags
+            .iter()
+            .map(|t| {
+                serde_json::Value::Array(
+                    t.iter().map(|s| serde_json::Value::String(s.clone())).collect(),
+                )
+            })
+            .collect();
+
+        let commitment = serde_json::json!([0, pubkey_hex, created_at, kind, tags_json, content]);
+        let commitment_str = serde_json::to_string(&commitment)?;
+
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(commitment_str.as_bytes());
+        let event_id_bytes: [u8; 32] = hasher.finalize().into();
+        let event_id_hex = hex::encode(event_id_bytes);
+
+        let sig_hex = self
+            .identity
+            .sign_nostr_event(&event_id_bytes)
+            .map_err(|e| anyhow::anyhow!("Schnorr signing failed: {:?}", e))?;
+
+        info!("Signed event kind={} id={}", kind, event_id_hex);
+
+        let event_json = serde_json::json!({
+            "id":         event_id_hex,
+            "pubkey":     pubkey_hex,
+            "created_at": created_at,
+            "kind":       kind,
+            "tags":       serde_json::Value::Array(tags_json),
+            "content":    content,
+            "sig":        sig_hex,
+        });
+
+        Ok(SignedEvent {
+            id: event_id_hex,
+            pubkey: pubkey_hex.clone(),
+            created_at,
+            kind,
+            content: content.to_string(),
+            sig: sig_hex,
+            json: serde_json::to_string_pretty(&event_json)?,
+        })
+    }
+
+    /// Build and sign a Blossom upload-auth event (kind 24242, BUD-01).
+    /// Returns compact JSON suitable for base64-encoding into the Authorization header.
+    pub fn sign_blossom_auth(&self, sha256_hex: &str, size: u64) -> Result<String> {
+        let expiry = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 600;
+
+        let tags = vec![
+            vec!["t".to_string(), "upload".to_string()],
+            vec!["x".to_string(), sha256_hex.to_string()],
+            vec!["size".to_string(), size.to_string()],
+            vec!["expiration".to_string(), expiry.to_string()],
+        ];
+
+        let event = self.sign_event(24242, "Upload image", tags)?;
+        // Blossom requires compact (non-pretty) JSON
+        let obj: serde_json::Value = serde_json::from_str(&event.json)?;
+        Ok(serde_json::to_string(&obj)?)
+    }
+
     /// Sign an ECDSA hash (e.g. a 32-byte image hash) and return the hex
     pub fn sign_frame_hash(&self, frame_data: &[u8]) -> Result<String> {
         // SHA-256 of the frame bytes
-        let mut hasher = Sha256::new();
+        let mut hasher = sha2::Sha256::new();
         hasher.update(frame_data);
         let hash: [u8; 32] = hasher.finalize().into();
 
@@ -127,7 +216,7 @@ impl NostreYeSigner {
             event.content,
         ]);
         let commitment_str = serde_json::to_string(&commitment)?;
-        let mut hasher = Sha256::new();
+        let mut hasher = sha2::Sha256::new();
         hasher.update(commitment_str.as_bytes());
         let computed_id: [u8; 32] = hasher.finalize().into();
         let computed_id_hex = hex::encode(computed_id);

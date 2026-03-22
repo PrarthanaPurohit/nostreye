@@ -20,7 +20,7 @@ device-signer = "0.1"
 nostr = { version = "0.44", features = ["std"] }
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 # Structured logging
 tracing = "0.1"
@@ -34,3 +34,13 @@ sha2 = "0.10"
 hex = "0.4"
 serde_json = "1"
 image = "0.24"
+
+# HTTP client (rustls avoids OpenSSL on RPi)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# WebSocket for Nostr relay publishing
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+# Base64 encoding for Blossom auth header
+base64 = "0.22"

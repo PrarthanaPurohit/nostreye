@@ -1,4 +1,5 @@
 mod camera;
+mod publisher;
 mod signer;
 
 use anyhow::Result;
@@ -9,7 +10,6 @@ const CAPTURE_PATH: &str = "/tmp/nostreye_capture.jpg";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 0. Logging
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -34,14 +34,16 @@ async fn main() -> Result<()> {
         println!("└────────────────────────────────────────────────────┘\n");
     }
 
-    // 2. Capture a frame (only if a camera is available) 
-    let frame_bytes_opt: Option<Vec<u8>> = if !cameras.is_empty() {
+    // 2. Capture a frame
+    let frame_info_opt = if !cameras.is_empty() {
         info!("Capturing frame from camera 0 → {}", CAPTURE_PATH);
         match camera::capture_frame(0, CAPTURE_PATH) {
-            Ok(n) => {
-                println!("✓  Captured {} bytes → {}\n", n, CAPTURE_PATH);
-                // Read back bytes for hashing
-                std::fs::read(CAPTURE_PATH).ok()
+            Ok(fi) => {
+                println!(
+                    "✓  Captured {} bytes ({}x{}) → {}\n",
+                    fi.file_size, fi.width, fi.height, CAPTURE_PATH
+                );
+                Some(fi)
             }
             Err(e) => {
                 error!("Capture failed: {:#}", e);
@@ -53,74 +55,86 @@ async fn main() -> Result<()> {
         None
     };
 
-    //3. Initialise device-signer 
+    // Read back JPEG bytes for signing / publishing
+    let frame_bytes_opt: Option<Vec<u8>> = frame_info_opt
+        .as_ref()
+        .and_then(|_| std::fs::read(CAPTURE_PATH).ok());
+
+    // 3. Initialise device-signer
     info!("Initialising hardware-linked DeviceIdentity…");
-    // Pass the camera ID (if any) as additional entropy
     let camera_label = cameras
         .first()
         .map(|c| format!("cam-{}", &c.id.chars().take(12).collect::<String>()));
-    let signer = signer::NostreYeSigner::new(camera_label)?;
+    let signer = signer::NostreyeSigner::new(camera_label)?;
 
     println!("┌─ Device Identity ──────────────────────────────────┐");
     println!("│  npub   : {}", signer.npub());
     println!("│  pubkey : {}", signer.pubkey_hex());
     println!("└────────────────────────────────────────────────────┘\n");
 
-    // 4. Build Nostr event content with camera metadata
-    let camera_model = cameras.first().map(|c| c.id.clone()).unwrap_or_else(|| "no-camera".to_string());
-    let capture_ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let content = format!(
-        "📷 nostreye capture — camera: {camera_model} — frame_path: {CAPTURE_PATH} — ts: {capture_ts}"
-    );
-    info!("Event content: {}", content);
-
-    // 5. Sign the Nostr event (Schnorr / NIP-01)
-    info!("Signing Nostr text-note event…");
-    let event = signer.sign_text_note(&content, vec![])?;
-
-    println!("┌─ Signed Nostr Event (NIP-01) ──────────────────────┐");
-    println!("│  kind       : {}", event.kind);
-    println!("│  event_id   : {}", event.id);
-    println!("│  sig (16B)  : {}…", &event.sig[..16]);
+    // 4. Publish profile (kind 0) so npub is visible across clients
+    info!("Publishing profile (kind 0) to relays…");
+    let profile = signer.sign_metadata(
+        "nostreye",
+        "Nostreye Camera",
+        "RPi camera captures signed and published to Nostr",
+        "",
+    )?;
+    let profile_results = publisher::broadcast_event(&profile, publisher::RELAYS).await;
+    let ok_count = profile_results.iter().filter(|(_, a)| *a).count();
+    println!("┌─ Profile (kind 0) ───────────────────────────────────┐");
+    println!("│  Broadcast to {} relays: {} accepted", profile_results.len(), ok_count);
     println!("└────────────────────────────────────────────────────┘\n");
 
-    // 6. Sign the frame with ECDSA (integrity attestation)
-    if let Some(data) = &frame_bytes_opt {
+    // 5. ECDSA frame integrity signature
+    let ecdsa_sig_opt = if let Some(data) = &frame_bytes_opt {
         info!("Computing ECDSA integrity signature over captured frame…");
         match signer.sign_frame_hash(data) {
-            Ok(ecdsa_sig) => {
+            Ok(sig) => {
                 println!("┌─ Frame Integrity (ECDSA) ───────────────────────────┐");
-                println!("│  ECDSA sig : {}…", &ecdsa_sig[..32.min(ecdsa_sig.len())]);
+                println!("│  ECDSA sig : {}…", &sig[..32.min(sig.len())]);
                 println!("└────────────────────────────────────────────────────┘\n");
+                Some(sig)
             }
             Err(e) => {
                 error!("ECDSA signing error: {:#}", e);
+                None
             }
         }
-    }
+    } else {
+        None
+    };
 
-    // 7. Verify the signed event locally
-    info!("Verifying Schnorr signature on signed event…");
-    match signer::NostreYeSigner::verify_event(&event) {
-        Ok(true) => {
-            println!("✓  Signature verified: VALID\n");
+    // 6. Publish image to Nostr (Blossom upload + kind 1 + kind 1063)
+    if let (Some(jpeg), Some(ecdsa_sig), Some(fi)) =
+        (&frame_bytes_opt, &ecdsa_sig_opt, &frame_info_opt)
+    {
+        println!("┌─ Publishing to Nostr ───────────────────────────────┐");
+        match publisher::publish_image(
+            jpeg,
+            ecdsa_sig,
+            fi.width,
+            fi.height,
+            &signer,
+            publisher::BLOSSOM_SERVER,
+            publisher::RELAYS,
+        )
+        .await
+        {
+            Ok(result) => {
+                println!("│  Image URL : {}", result.image_url);
+                for (relay, ok) in &result.relay_results {
+                    let status = if *ok { "✓ accepted" } else { "✗ rejected" };
+                    println!("│  {:14} {}", status, relay);
+                }
+            }
+            Err(e) => {
+                error!("Publish failed: {:#}", e);
+                println!("│  [!] Publish failed: {}", e);
+            }
         }
-        Ok(false) => {
-            println!("✗  Signature verified: INVALID\n");
-        }
-        Err(e) => {
-            println!("[!] Verification error: {}\n", e);
-        }
+        println!("└────────────────────────────────────────────────────┘\n");
     }
-
-    // 8. Print the full event JSON 
-    println!("┌─ Full Event JSON ───────────────────────────────────┐");
-    println!("{}", event.json);
-    println!("└────────────────────────────────────────────────────┘\n");
 
     info!("nostreye-cam demo complete.");
     Ok(())
