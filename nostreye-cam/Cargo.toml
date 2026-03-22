@@ -10,9 +10,6 @@ name = "nostreye-cam"
 path = "src/main.rs"
 
 [dependencies]
-# Safe Rust bindings for libcamera (requires libcamera >= 0.4.0 via pkg-config)
-libcamera = "0.7"
-
 # device-signer: hardware-linked secp256k1 key gen + Nostr Schnorr signing
 device-signer = "0.1"
 
@@ -33,8 +30,6 @@ anyhow = "1"
 sha2 = "0.10"
 hex = "0.4"
 serde_json = "1"
-image = "0.24"
-
 # HTTP client (rustls avoids OpenSSL on RPi)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
