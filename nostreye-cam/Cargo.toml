@@ -17,7 +17,7 @@ device-signer = "0.1"
 nostr = { version = "0.44", features = ["std"] }
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-std"] }
 
 # Structured logging
 tracing = "0.1"
