@@ -14,7 +14,6 @@ pub const RELAYS: &[&str] = &[
     "wss://nos.lol",
     "wss://relay.primal.net",
     "wss://relay.snort.social",
-    "wss://relay.nostr.band",
     "wss://nostr.mom",
 ];
 

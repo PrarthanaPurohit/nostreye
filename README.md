@@ -45,7 +45,7 @@ cargo run
 6. **Publish** — Uploads the image to Blossom (BUD-01 auth), then broadcasts:
    - **Kind 1** — Text note with the image URL (visible in Damus, Primal, Snort, etc.).
    - **Kind 1063** — NIP-94 file-metadata event with URL, SHA256, dimensions, and ECDSA attestation.
-   Relays: `relay.damus.io`, `nos.lol`, `relay.primal.net`, `relay.snort.social`, `relay.nostr.band`, `nostr.mom`.
+   Relays: `relay.damus.io`, `nos.lol`, `relay.primal.net`, `relay.snort.social`, `nostr.mom`.
 
 ### Viewing the captured image
 
