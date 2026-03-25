@@ -1,10 +1,10 @@
 # nostreye
 
-`nostreye` captures images from a Raspberry Pi camera and integrates them with the Nostr protocol. It securely captures images, encodes them as JPEGs, signs events and frame data, and publishes them to Nostr relays.
+`nostreye` captures images from a Raspberry Pi camera and integrates them with the Nostr protocol. It signs events and frame data, then publishes images to Nostr relays.
 
 ## Project Structure
 
-- `nostreye-cam`: A Rust application using the `libcamera` crate to interface with the camera. It captures a frame, converts YUV formats (YU12, NV12, etc.) to JPEG, generates cryptographic signatures via hardware-linked identity (`NostreyeSigner`), and publishes the image to Nostr via Blossom and relays.
+- `nostreye-cam`: A Rust application that discovers the Pi camera, captures stills to JPEG, generates cryptographic signatures via hardware-linked identity (`NostreyeSigner`), and publishes to Nostr via Blossom and relays.
 - `deploy.sh`: Deploys and builds `nostreye-cam` from your development environment to a Raspberry Pi over SSH.
 
 ## Prerequisites
@@ -12,8 +12,6 @@
 **Target device (Raspberry Pi):**
 - Compatible camera module (e.g. IMX708 on RPi 5)
 - Rust toolchain (`rustc`, `cargo`)
-- `libcamera` development headers
-- `pkg-config`
 
 Network connectivity is required for publishing images to Nostr.
 
@@ -37,8 +35,10 @@ cargo run
 
 ### Process flow
 
-1. **Detect cameras** — Lists available cameras via `libcamera`.
-2. **Capture** — Captures a frame and saves a valid JPEG at `/tmp/nostreye_capture.jpg`. Supports YU12/I420, YV12, NV12, NV21, YUYV, RG24, and MJPEG.
+Capture uses the Pi’s standard still capture CLI (`rpicam-still` on `PATH`, e.g. from Raspberry Pi OS `rpicam-apps` / `libcamera-apps`).
+
+1. **Detect cameras** — Lists cameras and parses the tool’s output.
+2. **Capture** — Writes a JPEG to `/tmp/nostreye_capture.jpg` (1920×1080, quality 95).
 3. **Device identity** — Initialises hardware-linked identity (secp256k1) using `device-signer`.
 4. **Profile (kind 0)** — Signs and broadcasts a metadata event so your npub shows a profile (name, display_name, about) across Nostr clients. Sent first so relays have the profile before any other events.
 5. **Frame integrity** — Computes ECDSA signature over the JPEG bytes (attestation).
@@ -73,10 +73,8 @@ The device uses `device-signer` to derive a deterministic secp256k1 key from har
 
 ## Core libraries
 
-- **libcamera** — Hardware camera interaction.
 - **device-signer** — Hardware-linked identity; Schnorr and ECDSA signing.
 - **nostr** — Event building and verification.
-- **image** — YUV→RGB conversion and JPEG encoding.
 - **reqwest** — HTTP client (Blossom upload).
 - **tokio-tungstenite** — WebSocket client (relay publish).
 - **tokio** — Async runtime.
